@@ -385,34 +385,64 @@ void ProcessExplicitRxFrame(XBeeIncomingRxPacket* inPacket)
         ProcessZdpProfile(inPacket);
         break;
 
-    // Home Automation profile
-    case 0x0104:
-        // TODO
+    // Other profiles
+    default:
+        processGenericProfile(inPacket);
         break;
     }
-    // // Basic cluster
-    // if (inPacket->clusterId == 0x0000)
-    // {
-    //     Serial.write("*BASIC CLUSTER*");
-    //     ZCLFrameData zclFrameData;
-    //     ParseZCLFrame(inPacket, &zclFrameData);
+    
+}
 
-    //     // Read Attribute command
-    //     if (zclFrameData.commandIdentifier == 0x00)
-    //     {
-    //         Serial.write("*READ ATTRIBUTE*");
+void processGenericProfile(XBeeIncomingRxPacket* inPacket)
+{
+    // Find endpoint
+    unsigned int targetEndpoint = inPacket->destinationEndpoint;
+    if (targetEndpoint < SUPPORTED_ENDPOINTS_LENGTH && g_Zb.supportedEndpoints[targetEndpoint] != nullptr)
+    {
+        ZBEndpoint* endpoint = g_Zb.supportedEndpoints[targetEndpoint];
 
-    //         for (unsigned int i = 0; i < zclFrameData.payloadLength; ++i)
-    //         {
-    //             switch (zclFrameData.payload[i])
-    //             {
-    //             case 0x04:
-    //                 Serial.write("*MANUFACTURER ATTRIBUTE*");
-    //                 break;
-    //             }
-    //         }
-    //     }
-    // }
+        // Ensure presence of requested profile ID
+        ZBProfile* profile = endpoint->profile;
+        if (profile->profileId == inPacket->profileId)
+        {
+            // Ensure presence of requested cluster ID
+            ZBCluster* cluster = profile->inputClusterList;
+            while (cluster != nullptr)
+            {
+                if (cluster->clusterId == inPacket->clusterId)
+                {
+                    break;
+                }
+                else
+                {
+                    cluster = cluster->nextCluster;
+                }
+            }
+            if (cluster != nullptr)
+            {
+                ZCLFrameData zclFrameData;
+                ParseZCLFrame(inPacket, &zclFrameData);
+                switch (zclFrameData.commandIdentifier)
+                {
+                // Read attribute command
+                case 0x00:
+                    break;
+                }
+            }
+            else
+            {
+                // Cluster ID not found
+            }
+        }
+        else
+        {
+            // Profile ID mismatch
+        }
+    }
+    else
+    {
+        // Endpoint does not exist.
+    }
 }
 
 void ProcessZdpProfile(XBeeIncomingRxPacket* inPacket)
