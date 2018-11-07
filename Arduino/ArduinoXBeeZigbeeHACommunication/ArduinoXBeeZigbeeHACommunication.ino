@@ -15,6 +15,15 @@
 #define INVALID_EP 0x82
 
 /**
+ * Represents a cluster command, and provides a function for processing it
+ */
+struct ZBClusterCommand
+{
+    byte commandId;
+    void (*commandFunctionPtr)(ZBCluster* cluster, byte payload[], unsigned int payloadLength);
+};
+
+/**
  * Struct representing a supported ZB cluster attribute
  */
 struct ZBClusterAttribute
@@ -30,7 +39,10 @@ struct ZBClusterAttribute
 struct ZBCluster
 {
     unsigned int clusterId;
-    ZBClusterAttribute* clusterAttributesList;
+    ZBClusterAttribute** clusterAttributes;
+    unsigned int clusterAttributesLength;
+    ZBClusterCommand** clusterCommands;
+    unsigned int clusterCommandsLength;
     ZBCluster* nextCluster; // Linked list next cluster
 };
 
@@ -193,6 +205,69 @@ void loop()
         // Send Association Indication command to get status
         SendAiAtCommand();
         g_xBeeStatus.lastAiCommandSentTimeMs = millis();
+    }
+}
+#pragma endregion
+
+#pragma region ZB Management functions
+/**
+ * @brief Given an endpoint number, find and return the ZBEndpoint instance
+ * 
+ * @param[in] endpointNumber The endpoint number to search for
+ * @return The ZBEndpoint object or nullptr if it does not exist
+ */
+ZBEndpoint* findZbEndpoint(byte endpointNumber)
+{
+    if (endpointNumber < SUPPORTED_ENDPOINTS_LENGTH && g_Zb.supportedEndpoints[endpointNumber] != nullptr)
+    {
+        return g_Zb.supportedEndpoints[endpointNumber];
+    }
+    else
+    {
+        return nullptr;
+    }
+}
+
+/**
+ * @brief Given a profile and cluster ID, find the cluster object
+ * 
+ * @param[in] profile The profile to search in
+ * @param[in] clusterId The cluster ID to search for
+ * @return Matching ZBCluster object or nullptr if it does not exist
+ */
+ZBCluster* findZbProfileCluster(ZBProfile* profile, byte clusterId)
+{
+    ZBCluster* cluster = profile->inputClusterList;
+    while (cluster != nullptr)
+    {
+        if (cluster->clusterId == clusterId)
+        {
+            break;
+        }
+        else
+        {
+            cluster = cluster->nextCluster;
+        }
+    }
+    return cluster;
+}
+
+/**
+ * @brief Given a cluster and command ID, find the command object
+ * 
+ * @param[in] cluster The cluster to search in
+ * @param[in] clusterId The command ID to search for
+ * @return Matching ZBClusterCommand or nullptr if it does not exist
+ */
+ZBClusterCommand* findZbClusterCommand(ZBCluster* cluster, byte commandId)
+{
+    if (commandId < cluster->clusterCommandsLength && cluster->clusterCommands[commandId] != nullptr)
+    {
+        return cluster->clusterCommands[commandId];
+    }
+    else
+    {
+        return nullptr;
     }
 }
 #pragma endregion
@@ -397,36 +472,52 @@ void processGenericProfile(XBeeIncomingRxPacket* inPacket)
 {
     // Find endpoint
     unsigned int targetEndpoint = inPacket->destinationEndpoint;
-    if (targetEndpoint < SUPPORTED_ENDPOINTS_LENGTH && g_Zb.supportedEndpoints[targetEndpoint] != nullptr)
+    ZBEndpoint* endpoint = findZbEndpoint(targetEndpoint);
+    if (endpoint != nullptr)
     {
-        ZBEndpoint* endpoint = g_Zb.supportedEndpoints[targetEndpoint];
-
         // Ensure presence of requested profile ID
         ZBProfile* profile = endpoint->profile;
         if (profile->profileId == inPacket->profileId)
         {
             // Ensure presence of requested cluster ID
-            ZBCluster* cluster = profile->inputClusterList;
-            while (cluster != nullptr)
-            {
-                if (cluster->clusterId == inPacket->clusterId)
-                {
-                    break;
-                }
-                else
-                {
-                    cluster = cluster->nextCluster;
-                }
-            }
+            ZBCluster* cluster = findZbProfileCluster(profile, inPacket->clusterId);
             if (cluster != nullptr)
             {
+                // Pull out Zigbee Cluster Library frame data so we know where to route this command
                 ZCLFrameData zclFrameData;
                 ParseZCLFrame(inPacket, &zclFrameData);
-                switch (zclFrameData.commandIdentifier)
+
+                // Is this a global cluster command?
+                if (zclFrameData.frameControlType == 0x00)
                 {
-                // Read attribute command
-                case 0x00:
-                    break;
+                    switch (zclFrameData.commandIdentifier)
+                    {
+                    // Read attribute command
+                    case 0x00:
+                        break;
+                    }
+                }
+
+                // Is this a cluster-specific command?
+                else if (zclFrameData.frameControlType == 0x01)
+                {
+                    // Find the function for this command
+                    ZBClusterCommand* command = findZbClusterCommand(cluster, zclFrameData.commandIdentifier);
+                    if (command != nullptr)
+                    {
+                        // Run the command
+                        command->commandFunctionPtr(cluster, zclFrameData.payload, zclFrameData.payloadLength);
+                    }
+                    else
+                    {
+                        // Unknown command for this cluster
+                    }
+                }
+
+                // Something other type of command
+                else
+                {
+                    // Unknown command type
                 }
             }
             else
@@ -436,7 +527,7 @@ void processGenericProfile(XBeeIncomingRxPacket* inPacket)
         }
         else
         {
-            // Profile ID mismatch
+            // Profile ID mismatch for this endpoint
         }
     }
     else
