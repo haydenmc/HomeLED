@@ -7,87 +7,16 @@
  * device via an XBee device over serial configured to operate in API mode.
  */
 
+#include "ZigBee.h"
+#include "ZigBeeClusterLibraryFrame.h"
+#include "ZigBeeColorDimmableLightEndpoint.h"
+
 #define PACKET_BUFFER_LENGTH 128
 #define SUPPORTED_ENDPOINTS_LENGTH 2
 
 // ZCL status codes
 #define SUCCESS 0x00
 #define INVALID_EP 0x82
-
-/**
- * Represents a cluster command, and provides a function for processing it
- */
-struct ZBClusterCommand
-{
-    byte commandId;
-    void (*commandFunctionPtr)(ZBCluster* cluster, byte payload[], unsigned int payloadLength);
-};
-
-/**
- * Struct representing a supported ZB cluster attribute
- */
-struct ZBClusterAttribute
-{
-    byte attributeId;
-    byte attributeValue;
-    ZBClusterAttribute* nextAttribute; // Linked list next attribute
-};
-
-/**
- * Struct representing a supported ZB Cluster
- */
-struct ZBCluster
-{
-    unsigned int clusterId;
-    ZBClusterAttribute** clusterAttributes;
-    unsigned int clusterAttributesLength;
-    ZBClusterCommand** clusterCommands;
-    unsigned int clusterCommandsLength;
-    ZBCluster* nextCluster; // Linked list next cluster
-};
-
-/**
- * Struct representing supported ZB profile
- */
-struct ZBProfile
-{
-    unsigned int profileId;
-    ZBCluster* inputClusterList;
-    ZBCluster* outputClusterList;
-};
-
-/**
- * Struct representing a supported ZB Endpoint
- */
-struct ZBEndpoint
-{
-    unsigned int deviceId;
-    byte deviceVersion;
-    ZBProfile* profile;
-};
-
-/**
- * Struct representing Zigbee state
- */
-struct ZB
-{
-    ZBEndpoint* supportedEndpoints[SUPPORTED_ENDPOINTS_LENGTH] { nullptr };
-};
-
-/**
- * Struct representing a parsed ZCL frame
- */
-struct ZCLFrameData
-{
-    byte frameControlType;
-    bool frameControlManufacturerSpecific;
-    bool frameControlDirection;
-    bool frameControlDisableDefaultResponse;
-    byte transactionSequenceNumber;
-    byte commandIdentifier;
-    byte payload[PACKET_BUFFER_LENGTH];
-    unsigned int payloadLength;
-};
 
 /**
  * Struct representing an XBee explicit rx packet
@@ -130,9 +59,14 @@ struct XBee
 XBee g_xBeeStatus;
 
 /**
+ * Global color dimmable light endpoint
+ */
+ZigBeeColorDimmableLightEndpoint g_colorDimmableLightEndpoint;
+
+/**
  * Global ZB definition
  */
-ZB g_Zb;
+ZigBee g_Zb;
 
 #pragma region Arduino functions
 /**
@@ -140,20 +74,15 @@ ZB g_Zb;
  */
 void setup()
 {
+    // Set up LEDs
+    pinMode(3, OUTPUT);
+
     // Set up XBee state
     g_xBeeStatus.isConnected = false;
     g_xBeeStatus.lastFrameId = 0x00;
 
     // Set up ZB state
-    // Endpoint 0
-    static ZBProfile zdpProfile { 0x0000 /* profile ID */, nullptr /* input clusters */, nullptr /* output clusters */ };
-    static ZBEndpoint endpointZero { 0x0000 /* device ID */, 0x00 /* device version */, &zdpProfile };
-    g_Zb.supportedEndpoints[0] = &endpointZero;
-
-    // Endpoint 1 (home automation / color light)
-    static ZBProfile haProfile { 0x0104 /* profile ID */, nullptr /* input clusters */, nullptr /* output clusters */ };
-    static ZBEndpoint endpointOne { 0x0102 /* device ID */, 0x00 /* device version */, &haProfile };
-    g_Zb.supportedEndpoints[1] = &endpointOne;
+    g_Zb.SetEndpoint(1, &g_colorDimmableLightEndpoint);
 
     // Open serial port to XBee
     Serial.begin(9600);
@@ -165,6 +94,10 @@ void setup()
  */
 void loop()
 {
+    // Update LED
+    byte level = (g_colorDimmableLightEndpoint.GetLevel() / (float)(0xFFFF)) * 0xFF;
+    analogWrite(3, level);
+
     // Process incoming commands
     if (Serial.available() > 0)
     {
@@ -205,69 +138,6 @@ void loop()
         // Send Association Indication command to get status
         SendAiAtCommand();
         g_xBeeStatus.lastAiCommandSentTimeMs = millis();
-    }
-}
-#pragma endregion
-
-#pragma region ZB Management functions
-/**
- * @brief Given an endpoint number, find and return the ZBEndpoint instance
- * 
- * @param[in] endpointNumber The endpoint number to search for
- * @return The ZBEndpoint object or nullptr if it does not exist
- */
-ZBEndpoint* findZbEndpoint(byte endpointNumber)
-{
-    if (endpointNumber < SUPPORTED_ENDPOINTS_LENGTH && g_Zb.supportedEndpoints[endpointNumber] != nullptr)
-    {
-        return g_Zb.supportedEndpoints[endpointNumber];
-    }
-    else
-    {
-        return nullptr;
-    }
-}
-
-/**
- * @brief Given a profile and cluster ID, find the cluster object
- * 
- * @param[in] profile The profile to search in
- * @param[in] clusterId The cluster ID to search for
- * @return Matching ZBCluster object or nullptr if it does not exist
- */
-ZBCluster* findZbProfileCluster(ZBProfile* profile, byte clusterId)
-{
-    ZBCluster* cluster = profile->inputClusterList;
-    while (cluster != nullptr)
-    {
-        if (cluster->clusterId == clusterId)
-        {
-            break;
-        }
-        else
-        {
-            cluster = cluster->nextCluster;
-        }
-    }
-    return cluster;
-}
-
-/**
- * @brief Given a cluster and command ID, find the command object
- * 
- * @param[in] cluster The cluster to search in
- * @param[in] clusterId The command ID to search for
- * @return Matching ZBClusterCommand or nullptr if it does not exist
- */
-ZBClusterCommand* findZbClusterCommand(ZBCluster* cluster, byte commandId)
-{
-    if (commandId < cluster->clusterCommandsLength && cluster->clusterCommands[commandId] != nullptr)
-    {
-        return cluster->clusterCommands[commandId];
-    }
-    else
-    {
-        return nullptr;
     }
 }
 #pragma endregion
@@ -410,40 +280,48 @@ void ParseExplicitRxFrame(XBeePacket* inPacket, XBeeIncomingRxPacket* outPacket)
  * @param[in] inPacket      The XBee incoming Rx packet
  * @param[out] outFrameData The parsed ZCL frame data
  */
-void ParseZCLFrame(XBeeIncomingRxPacket* inPacket, ZCLFrameData* outFrameData)
+void ParseZCLFrame(XBeeIncomingRxPacket* inPacket, ZigBeeClusterLibraryFrame* outFrame)
 {
+    // First, copy over existing fields
+    outFrame->longSourceAddress = inPacket->longSourceAddress;
+    outFrame->shortSourceAddress = inPacket->shortSourceAddress;
+    outFrame->sourceEndpoint = inPacket->sourceEndpoint;
+    outFrame->destinationEndpoint = inPacket->destinationEndpoint;
+    outFrame->clusterId = inPacket->clusterId;
+    outFrame->profileId = inPacket->profileId;
+
     // The first byte is the "frame control" byte
     byte frameControlByte = inPacket->data[0];
 
     // First two bits are the frame control type
     // xx000000
-    outFrameData->frameControlType = (frameControlByte >> 6) & 0x03;
+    outFrame->frameControlType = (frameControlByte >> 6) & 0x03;
 
     // Next bit is manufacturer specific
     // 00x00000
-    outFrameData->frameControlManufacturerSpecific = (frameControlByte >> 5) & 0x01;
+    outFrame->frameControlManufacturerSpecific = (frameControlByte >> 5) & 0x01;
 
     // Next bit is direction
     // 000x0000
-    outFrameData->frameControlDirection = (frameControlByte >> 4) & 0x01;
+    outFrame->frameControlDirection = (frameControlByte >> 4) & 0x01;
 
     // Next bit is "disable default response"
     // 0000x000
-    outFrameData->frameControlDisableDefaultResponse = (frameControlByte >> 3) & 0x01;
+    outFrame->frameControlDisableDefaultResponse = (frameControlByte >> 3) & 0x01;
 
     // Next byte is the "transaction sequence number"
     // (unless manufacturer specific is true - we're ignoring this case)
-    outFrameData->transactionSequenceNumber = inPacket->data[1];
+    outFrame->transactionSequenceNumber = inPacket->data[1];
 
     // Next byte is the command
-    outFrameData->commandIdentifier = inPacket->data[2];
+    outFrame->commandIdentifier = inPacket->data[2];
 
     // And the rest is payload
     for (unsigned int i = 3; i < inPacket->dataLength; ++i)
     {
-        outFrameData->payload[i - 3] = inPacket->data[i];
+        outFrame->payload[i - 3] = inPacket->data[i];
     }
-    outFrameData->payloadLength = inPacket->dataLength - 3;
+    outFrame->payloadLength = inPacket->dataLength - 3;
 }
 
 /**
@@ -453,239 +331,164 @@ void ParseZCLFrame(XBeeIncomingRxPacket* inPacket, ZCLFrameData* outFrameData)
  */
 void ProcessExplicitRxFrame(XBeeIncomingRxPacket* inPacket)
 {
-    switch (inPacket->profileId)
-    {
-    // ZDP profile
-    case 0x0000:
-        ProcessZdpProfile(inPacket);
-        break;
+    // Pull out Zigbee Cluster Library frame data
+    ZigBeeClusterLibraryFrame zclFrame;
+    ParseZCLFrame(inPacket, &zclFrame);
 
-    // Other profiles
-    default:
-        processGenericProfile(inPacket);
-        break;
-    }
+    // Pass to ZigBee
+    g_Zb.ProcessFrame(&zclFrame);
+}
+
+// void ProcessZdpProfile(XBeeIncomingRxPacket* inPacket)
+// {
+//     switch (inPacket->clusterId)
+//     {
+//     // Simple Descriptor request
+//     case 0x0004:
+//         ProcessZdpSimpleDescriptorRequest(inPacket);
+//         break;
+
+//     // Active Endpoints request
+//     case 0x0005:
+//         ProcessZdpActiveEndpointsRequest(inPacket);
+//         break;
+
+//     // Matching Endpoints request
+//     case 0x0006:
+//         // TODO
+//         break;
+//     }
+// }
+
+// void ProcessZdpSimpleDescriptorRequest(XBeeIncomingRxPacket* inPacket)
+// {
+//     // Allocate payload
+//     byte payload[PACKET_BUFFER_LENGTH];
+//     unsigned int payloadLength = 0;
+
+//     // Payload is going back to sender
+//     // Write address out in little-endian (least-significant-bytes first)
+//     payload[1] = inPacket->shortSourceAddress & 0xFF;
+//     payload[2] = (inPacket->shortSourceAddress >> 8) & 0xFF;
+
+//     // Read endpoint
+//     byte targetEndpoint = inPacket->data[2];
+
+//     // Verify that we have that endpoint
+//     ZBEndpoint* endpoint = nullptr;
+//     if (targetEndpoint < SUPPORTED_ENDPOINTS_LENGTH)
+//     {
+//         endpoint = g_Zb.supportedEndpoints[targetEndpoint];
+//     }
+//     if (endpoint == nullptr)
+//     {
+//         // This endpoint doesn't exist. Make an error payload.
+//         payload[0] = INVALID_EP;
+//         payload[3] = 0x00;
+//         payloadLength = 4;
+//     }
+//     else
+//     {
+//         // We support this endpoint. Make a simple descriptor response payload.
+//         payload[0] = SUCCESS;
+
+//         // Simple descriptor
+//         payload[4] = targetEndpoint; // endpoint
+//         payload[5] = endpoint->profile->profileId & 0xFF; // profile id LSB
+//         payload[6] = (endpoint->profile->profileId >> 8) & 0xFF; // profile id MSB
+//         payload[7] = endpoint->deviceId & 0xFF; // profile id LSB
+//         payload[8] = (endpoint->deviceId >> 8) & 0xFF; // profile id MSB
+//         payload[9] = ((endpoint->deviceVersion & 0x0F) << 4) & 0xF0; // device version and 4 reserved bits (0)
+
+//         // input cluster IDs
+//         ZBCluster* inputCluster = endpoint->profile->inputClusterList;
+//         unsigned int inputClusterCount = 0;
+//         while (inputCluster != nullptr)
+//         {
+//             inputClusterCount++;
+//             payload[10 + (inputClusterCount * 2) - 1] = inputCluster->clusterId & 0xFF; // cluster id LSB
+//             payload[10 + (inputClusterCount * 2)] = (inputCluster->clusterId >> 8) & 0xFF; // cluster id MSB
+//             inputCluster = inputCluster->nextCluster;
+//         }
+//         payload[10] = inputClusterCount;
+
+//         // output cluster IDs
+//         unsigned int outputClusterPayloadIndexOffset = 11 + (inputClusterCount * 2);
+//         ZBCluster* outputCluster = endpoint->profile->outputClusterList;
+//         unsigned int outputClusterCount = 0;
+//         while (outputCluster != nullptr)
+//         {
+//             outputClusterCount++;
+//             payload[outputClusterPayloadIndexOffset + (outputClusterCount * 2) - 1]
+//                 = outputCluster->clusterId & 0xFF; // cluster id LSB
+//             payload[outputClusterPayloadIndexOffset + (outputClusterCount * 2)]
+//                 = (outputCluster->clusterId >> 8) & 0xFF; // cluster id MSB
+//             outputCluster = outputCluster->nextCluster;
+//         }
+//         payload[outputClusterPayloadIndexOffset] = outputClusterCount;
+
+//         // Calculate payload lengths
+//         payload[3] = 8 + (inputClusterCount * 2) + (outputClusterCount * 2);
+//         payloadLength = 12 + (inputClusterCount * 2) + (outputClusterCount * 2);
+//     }
+
+//     // Send response
+//     SendExplicitAddressingCommandFrame(
+//         0x0001, /* frame ID */
+//         inPacket->longSourceAddress, /* destination hw address */
+//         inPacket->shortSourceAddress, /* destination sw address */
+//         inPacket->destinationEndpoint, /* source endpoint */
+//         inPacket->sourceEndpoint, /* destination endpoint */
+//         0x8004, /* cluster ID */
+//         0x0000, /* profile ID */
+//         0x00, /* broadcast radius */
+//         0x00, /* transmission options */
+//         payload,
+//         payloadLength
+//     );
+// }
+
+// void ProcessZdpActiveEndpointsRequest(XBeeIncomingRxPacket* inPacket)
+// {
+//     // Allocate payload
+//     byte payload[PACKET_BUFFER_LENGTH];
+//     unsigned int payloadLength = 0;
+
+//     // Status
+//     payload[0] = SUCCESS;
+
+//     // Payload is going back to sender
+//     // Write address out in little-endian (least-significant-bytes first)
+//     payload[1] = inPacket->shortSourceAddress & 0xFF;
+//     payload[2] = (inPacket->shortSourceAddress >> 8) & 0xFF;
     
-}
+//     // Figure out how many active endpoints we have
+//     unsigned int supportedEndpointCount = 0;
+//     for (unsigned int i = 0; i < SUPPORTED_ENDPOINTS_LENGTH; ++i)
+//     {
+//         payload[4 + supportedEndpointCount] = i;
+//         ++supportedEndpointCount;
+//     }
 
-void processGenericProfile(XBeeIncomingRxPacket* inPacket)
-{
-    // Find endpoint
-    unsigned int targetEndpoint = inPacket->destinationEndpoint;
-    ZBEndpoint* endpoint = findZbEndpoint(targetEndpoint);
-    if (endpoint != nullptr)
-    {
-        // Ensure presence of requested profile ID
-        ZBProfile* profile = endpoint->profile;
-        if (profile->profileId == inPacket->profileId)
-        {
-            // Ensure presence of requested cluster ID
-            ZBCluster* cluster = findZbProfileCluster(profile, inPacket->clusterId);
-            if (cluster != nullptr)
-            {
-                // Pull out Zigbee Cluster Library frame data so we know where to route this command
-                ZCLFrameData zclFrameData;
-                ParseZCLFrame(inPacket, &zclFrameData);
+//     // Calculate payload lengths
+//     payload[3] = supportedEndpointCount;
+//     payloadLength = 4 + supportedEndpointCount;
 
-                // Is this a global cluster command?
-                if (zclFrameData.frameControlType == 0x00)
-                {
-                    switch (zclFrameData.commandIdentifier)
-                    {
-                    // Read attribute command
-                    case 0x00:
-                        break;
-                    }
-                }
-
-                // Is this a cluster-specific command?
-                else if (zclFrameData.frameControlType == 0x01)
-                {
-                    // Find the function for this command
-                    ZBClusterCommand* command = findZbClusterCommand(cluster, zclFrameData.commandIdentifier);
-                    if (command != nullptr)
-                    {
-                        // Run the command
-                        command->commandFunctionPtr(cluster, zclFrameData.payload, zclFrameData.payloadLength);
-                    }
-                    else
-                    {
-                        // Unknown command for this cluster
-                    }
-                }
-
-                // Something other type of command
-                else
-                {
-                    // Unknown command type
-                }
-            }
-            else
-            {
-                // Cluster ID not found
-            }
-        }
-        else
-        {
-            // Profile ID mismatch for this endpoint
-        }
-    }
-    else
-    {
-        // Endpoint does not exist.
-    }
-}
-
-void ProcessZdpProfile(XBeeIncomingRxPacket* inPacket)
-{
-    switch (inPacket->clusterId)
-    {
-    // Simple Descriptor request
-    case 0x0004:
-        ProcessZdpSimpleDescriptorRequest(inPacket);
-        break;
-
-    // Active Endpoints request
-    case 0x0005:
-        ProcessZdpActiveEndpointsRequest(inPacket);
-        break;
-
-    // Matching Endpoints request
-    case 0x0006:
-        // TODO
-        break;
-    }
-}
-
-void ProcessZdpSimpleDescriptorRequest(XBeeIncomingRxPacket* inPacket)
-{
-    // Allocate payload
-    byte payload[PACKET_BUFFER_LENGTH];
-    unsigned int payloadLength = 0;
-
-    // Payload is going back to sender
-    // Write address out in little-endian (least-significant-bytes first)
-    payload[1] = inPacket->shortSourceAddress & 0xFF;
-    payload[2] = (inPacket->shortSourceAddress >> 8) & 0xFF;
-
-    // Read endpoint
-    byte targetEndpoint = inPacket->data[2];
-
-    // Verify that we have that endpoint
-    ZBEndpoint* endpoint = nullptr;
-    if (targetEndpoint < SUPPORTED_ENDPOINTS_LENGTH)
-    {
-        endpoint = g_Zb.supportedEndpoints[targetEndpoint];
-    }
-    if (endpoint == nullptr)
-    {
-        // This endpoint doesn't exist. Make an error payload.
-        payload[0] = INVALID_EP;
-        payload[3] = 0x00;
-        payloadLength = 4;
-    }
-    else
-    {
-        // We support this endpoint. Make a simple descriptor response payload.
-        payload[0] = SUCCESS;
-
-        // Simple descriptor
-        payload[4] = targetEndpoint; // endpoint
-        payload[5] = endpoint->profile->profileId & 0xFF; // profile id LSB
-        payload[6] = (endpoint->profile->profileId >> 8) & 0xFF; // profile id MSB
-        payload[7] = endpoint->deviceId & 0xFF; // profile id LSB
-        payload[8] = (endpoint->deviceId >> 8) & 0xFF; // profile id MSB
-        payload[9] = ((endpoint->deviceVersion & 0x0F) << 4) & 0xF0; // device version and 4 reserved bits (0)
-
-        // input cluster IDs
-        ZBCluster* inputCluster = endpoint->profile->inputClusterList;
-        unsigned int inputClusterCount = 0;
-        while (inputCluster != nullptr)
-        {
-            inputClusterCount++;
-            payload[10 + (inputClusterCount * 2) - 1] = inputCluster->clusterId & 0xFF; // cluster id LSB
-            payload[10 + (inputClusterCount * 2)] = (inputCluster->clusterId >> 8) & 0xFF; // cluster id MSB
-            inputCluster = inputCluster->nextCluster;
-        }
-        payload[10] = inputClusterCount;
-
-        // output cluster IDs
-        unsigned int outputClusterPayloadIndexOffset = 11 + (inputClusterCount * 2);
-        ZBCluster* outputCluster = endpoint->profile->outputClusterList;
-        unsigned int outputClusterCount = 0;
-        while (outputCluster != nullptr)
-        {
-            outputClusterCount++;
-            payload[outputClusterPayloadIndexOffset + (outputClusterCount * 2) - 1]
-                = outputCluster->clusterId & 0xFF; // cluster id LSB
-            payload[outputClusterPayloadIndexOffset + (outputClusterCount * 2)]
-                = (outputCluster->clusterId >> 8) & 0xFF; // cluster id MSB
-            outputCluster = outputCluster->nextCluster;
-        }
-        payload[outputClusterPayloadIndexOffset] = outputClusterCount;
-
-        // Calculate payload lengths
-        payload[3] = 8 + (inputClusterCount * 2) + (outputClusterCount * 2);
-        payloadLength = 12 + (inputClusterCount * 2) + (outputClusterCount * 2);
-    }
-
-    // Send response
-    SendExplicitAddressingCommandFrame(
-        0x0001, /* frame ID */
-        inPacket->longSourceAddress, /* destination hw address */
-        inPacket->shortSourceAddress, /* destination sw address */
-        inPacket->destinationEndpoint, /* source endpoint */
-        inPacket->sourceEndpoint, /* destination endpoint */
-        0x8004, /* cluster ID */
-        0x0000, /* profile ID */
-        0x00, /* broadcast radius */
-        0x00, /* transmission options */
-        payload,
-        payloadLength
-    );
-}
-
-void ProcessZdpActiveEndpointsRequest(XBeeIncomingRxPacket* inPacket)
-{
-    // Allocate payload
-    byte payload[PACKET_BUFFER_LENGTH];
-    unsigned int payloadLength = 0;
-
-    // Status
-    payload[0] = SUCCESS;
-
-    // Payload is going back to sender
-    // Write address out in little-endian (least-significant-bytes first)
-    payload[1] = inPacket->shortSourceAddress & 0xFF;
-    payload[2] = (inPacket->shortSourceAddress >> 8) & 0xFF;
-    
-    // Figure out how many active endpoints we have
-    unsigned int supportedEndpointCount = 0;
-    for (unsigned int i = 0; i < SUPPORTED_ENDPOINTS_LENGTH; ++i)
-    {
-        payload[4 + supportedEndpointCount] = i;
-        ++supportedEndpointCount;
-    }
-
-    // Calculate payload lengths
-    payload[3] = supportedEndpointCount;
-    payloadLength = 4 + supportedEndpointCount;
-
-    // Send response
-    SendExplicitAddressingCommandFrame(
-        0x0001, /* frame ID */
-        inPacket->longSourceAddress, /* destination hw address */
-        inPacket->shortSourceAddress, /* destination sw address */
-        inPacket->destinationEndpoint, /* source endpoint */
-        inPacket->sourceEndpoint, /* destination endpoint */
-        0x8005, /* cluster ID */
-        0x0000, /* profile ID */
-        0x00, /* broadcast radius */
-        0x00, /* transmission options */
-        payload,
-        payloadLength
-    );
-}
+//     // Send response
+//     SendExplicitAddressingCommandFrame(
+//         0x0001, /* frame ID */
+//         inPacket->longSourceAddress, /* destination hw address */
+//         inPacket->shortSourceAddress, /* destination sw address */
+//         inPacket->destinationEndpoint, /* source endpoint */
+//         inPacket->sourceEndpoint, /* destination endpoint */
+//         0x8005, /* cluster ID */
+//         0x0000, /* profile ID */
+//         0x00, /* broadcast radius */
+//         0x00, /* transmission options */
+//         payload,
+//         payloadLength
+//     );
+// }
 #pragma endregion
 
 #pragma region Outgoing packet functions

@@ -32,3 +32,24 @@ bool ZigBee::SetEndpoint(unsigned int endpointNumber, ZigBeeEndpoint* endpoint)
         return false;
     }
 }
+
+void ZigBee::ProcessFrame(const ZigBeeClusterLibraryFrame* frame)
+{
+    if ((frame->destinationEndpoint < ZIGBEE_MAX_ENDPOINTS) &&
+        (this->endpoints[frame->destinationEndpoint] != nullptr))
+    {
+        ZigBeeEndpoint* targetEndpoint = this->endpoints[frame->destinationEndpoint];
+        if (targetEndpoint->GetProfileId() == frame->profileId)
+        {
+            targetEndpoint->ProcessFrame(frame);
+        }
+        else
+        {
+            // Profile mismatch
+        }
+    }
+    else
+    {
+        // Non-existant endpoint
+    }
+}
