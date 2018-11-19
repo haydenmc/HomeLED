@@ -3,8 +3,9 @@
 ZigBeeColorDimmableLightEndpoint::ZigBeeColorDimmableLightEndpoint()
 {
     this->lightIsOn = false;
-    this->lightHue = 0xFFFF;
-    this->lightSaturation = 0xFFFF;
+    // D65: (0.31271, 0.32902)
+    this->lightX = 0.31271 * 0xFFFF;
+    this->lightY = 0.32902 * 0xFFFF;
     this->lightLevel = 0xFFFF;
 }
 
@@ -23,14 +24,14 @@ unsigned int ZigBeeColorDimmableLightEndpoint::GetDeviceVersion()
     return 0x0000; // Version Number
 }
 
-unsigned int ZigBeeColorDimmableLightEndpoint::GetHue()
+unsigned int ZigBeeColorDimmableLightEndpoint::GetX()
 {
-    return this->lightHue;
+    return this->lightY;
 }
 
-unsigned int ZigBeeColorDimmableLightEndpoint::GetSaturation()
+unsigned int ZigBeeColorDimmableLightEndpoint::GetY()
 {
-    return this->lightSaturation;
+    return this->lightY;
 }
 
 unsigned int ZigBeeColorDimmableLightEndpoint::GetLevel()

@@ -13,15 +13,15 @@ class ZigBeeColorDimmableLightEndpoint : public ZigBeeEndpoint
         unsigned int GetDeviceVersion() override;
         void ProcessFrame(const ZigBeeClusterLibraryFrame* frame) override;
 
-        // ColorDimmableLightEndpoint
-        unsigned int GetHue();
-        unsigned int GetSaturation();
+        // ColorDimmableLightEndpoint (ColorMode xyY)
+        unsigned int GetX();
+        unsigned int GetY();
         unsigned int GetLevel();
 
     private:
         bool lightIsOn;
-        unsigned int lightHue;
-        unsigned int lightSaturation;
+        unsigned int lightX;
+        unsigned int lightY;
         unsigned int lightLevel;
 
         void ProcessOnOffCommand(const ZigBeeClusterLibraryFrame* frame);

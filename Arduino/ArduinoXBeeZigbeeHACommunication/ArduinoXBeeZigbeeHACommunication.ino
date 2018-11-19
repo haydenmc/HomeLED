@@ -18,6 +18,14 @@
 #define SUCCESS 0x00
 #define INVALID_EP 0x82
 
+struct LedPin
+{
+    byte pinNumber;
+    unsigned int chromacityX;
+    unsigned int chromacityY;
+    unsigned int luminanceY;
+};
+
 /**
  * Struct representing an XBee explicit rx packet
  */
@@ -54,6 +62,19 @@ struct XBee
 };
 
 /**
+ * Global LED diodes
+ */
+unsigned int ledNumber = 5;
+LedPin g_ledPins[] = {
+    // PIN  chromacityX                          chromacityY                          luminanceY
+    {  3,   (unsigned int)(0.4872689 * 0xFFFF),  (unsigned int)(0.4060504 * 0xFFFF),  (unsigned int)(0.06181437 * 0xFFFF) }, // Warm White (0.4872689, 0.4060504, 0.06181437)
+    {  5,   (unsigned int)(0.14420122 * 0xFFFF), (unsigned int)(0.71912652 * 0xFFFF), (unsigned int)(0.05011101 * 0xFFFF) }, // Green (0.14420122, 0.71912652, 0.05011101)
+    {  6,   (unsigned int)(0.69306747 * 0xFFFF), (unsigned int)(0.30609503 * 0xFFFF), (unsigned int)(0.02320192 * 0xFFFF) }, // Red (0.69306747, 0.30609503, 0.02320192)
+    {  9,   (unsigned int)(0.13345832 * 0xFFFF), (unsigned int)(0.05729985 * 0xFFFF), (unsigned int)(0.01138169 * 0xFFFF) }, // Blue (0.13345832, 0.05729985, 0.01138169)
+    {  10,  (unsigned int)(0.31253751 * 0xFFFF), (unsigned int)(0.33643754 * 0xFFFF), (unsigned int)(0.07776486 * 0xFFFF) }, // White (0.31253751, 0.33643754, 0.07776486)
+};
+
+/**
  * Global status of XBee connection
  */
 XBee g_xBeeStatus;
@@ -75,7 +96,10 @@ ZigBee g_Zb;
 void setup()
 {
     // Set up LEDs
-    pinMode(3, OUTPUT);
+    for (unsigned int i = 0; i < ledNumber; ++i)
+    {
+        pinMode(g_ledPins[i].pinNumber, OUTPUT);
+    }
 
     // Set up XBee state
     g_xBeeStatus.isConnected = false;
