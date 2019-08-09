@@ -125,6 +125,7 @@ void loop()
     // Process incoming commands
     if (Serial.available() > 0)
     {
+        Serial.print("+");
         XBeePacket packet;
         if (readIncomingPacket(&packet))
         {
@@ -135,6 +136,7 @@ void loop()
             // AT Command Response Frame (0x88)
             case 0x88:
                 ProcessAtCommandResponseFrame(&packet);
+                Serial.print("***AT PACKET***");
                 break;
 
             // Explicit Rx Frame (RF packet received)
@@ -142,6 +144,7 @@ void loop()
                 XBeeIncomingRxPacket incomingRxPacket;
                 ParseExplicitRxFrame(&packet, &incomingRxPacket);
                 ProcessExplicitRxFrame(&incomingRxPacket);
+                Serial.print("***RX PACKET***");
                 break;
 
             // Unknown packet
@@ -226,8 +229,20 @@ void ProcessAtCommandResponseFrame(XBeePacket* inPacket)
         byte statusCode = inPacket->payload[4];
         if (statusCode == 0x00)
         {
-            // Successfully joined Zigbee network
-            g_xBeeStatus.isConnected = true;
+            byte responseCode = inPacket->payload[5];
+            if (responseCode == 0x00)
+            {
+                // Successfully joined Zigbee network
+                g_xBeeStatus.isConnected = true;
+                Serial.print("***JOINED***");
+            }
+            else
+            {
+                g_xBeeStatus.isConnected = false;
+                Serial.print("***JOIN ERR ");
+                Serial.print(responseCode);
+                Serial.print("***");
+            }
         }
         else
         {

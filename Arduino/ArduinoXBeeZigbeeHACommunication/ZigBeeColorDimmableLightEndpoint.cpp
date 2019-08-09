@@ -26,7 +26,7 @@ unsigned int ZigBeeColorDimmableLightEndpoint::GetDeviceVersion()
 
 unsigned int ZigBeeColorDimmableLightEndpoint::GetX()
 {
-    return this->lightY;
+    return this->lightX;
 }
 
 unsigned int ZigBeeColorDimmableLightEndpoint::GetY()
