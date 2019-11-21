@@ -122,7 +122,7 @@ void ZigBeeColorDimmableLightEndpoint::ProcessLevelControlCommand(const ZigBeeCl
         case 0x00:
         {
             // TODO: Transition time
-            this->lightLevel = (frame->payload[0] / 0xFF) * 0xFFFF;
+            this->lightLevel = (frame->payload[0] / (float)(0xFF)) * 0xFFFF;
             break;
         }
         
